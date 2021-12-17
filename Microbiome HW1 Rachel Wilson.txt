@@ -1,0 +1,108 @@
+#question: how does site status affect seastar's microbiome? 
+
+#run Qiime to vizualize metadata
+$ conda activate qiime2-2021.8
+$ export TMPDIR="/data/project_data/16S/tmptmpdir"
+$ echo $TMPDIR
+
+
+#Make qiime "artifact"
+$ qiime tools import \
+  --type 'SampleData[PairedEndSequencesWithQuality]' \
+  --input-path /data/project_data/16S/pyc_manifest \
+  --input-format PairedEndFastqManifestPhred33V2 \
+  --output-path demux-paired-end_full.qza
+
+#Generate summary plots
+$ qiime demux summarize \
+  --i-data demux-paired-end.qza \         
+  --o-visualization demux-pyc.qzv 
+
+# denoise data with DADA2: trim, run in screen
+$ screen
+#screen controls: cntl + a + d to detach from a screen screen -r to reattach
+
+#Denoising: trim for begining, trunc at end, R=right, L-left
+# p-trim-left-f 16 = how many base pairs to trim from the left of the forward, then reverse reads
+	# cuts off low quality seq below Quality score of 30 for forward reads and below 25 for reverse reads. Hard cut so removed  
+# p-trunc-len-f 289 = which base pair to truncate to at the end of the forward and then reverse reads
+$ qiime dada2 denoise-paired \
+  --i-demultiplexed-seqs demux-paired-end_full.qza \
+  --p-n-threads 1 \
+  --p-trim-left-f 16 \
+  --p-trim-left-r 0 \
+  --p-trunc-len-f 289 \
+  --p-trunc-len-r 257 \
+  --o-table table.qza \
+  --o-representative-sequences rep-seqs.qza \
+  --o-denoising-stats denoising-stats.qza
+
+# Visualize denoised data
+$ qiime feature-table summarize \
+  --i-table table.qza \
+  --o-visualization table.qzv \
+  --m-sample-metadata-file /data/project_data/16S/pyc_manifest
+
+$ qiime feature-table tabulate-seqs \
+  --i-data rep-seqs.qza \
+  --o-visualization rep-seqs.qzv
+
+$ qiime metadata tabulate \
+  --m-input-file denoising-stats.qza \
+  --o-visualization denoising-stats.qzv
+  
+#calc alpha and beta diveristy: 1st build a phylogentic tree
+$ qiime phylogeny align-to-tree-mafft-fasttree \
+  --i-sequences rep-seqs.qza \
+  --o-alignment aligned-rep-seqs.qza \
+  --o-masked-alignment masked-aligned-rep-seqs.qza \
+  --o-tree unrooted-tree.qza \
+  --o-rooted-tree rooted-tree.qza
+
+# sample depth at 9000 includes all smaples  
+$ qiime diversity core-metrics-phylogenetic \
+  --i-phylogeny rooted-tree.qza \
+  --i-table table.qza \
+  --p-sampling-depth 9000 \
+  --m-metadata-file /data/project_data/16S/pyc_manifest \
+  --output-dir core-metrics-results
+
+#feature table: dont need to wget ftp://, need only do test the classifier step. database has lots of bacteria taxa,and already setup for us
+$ qiime feature-classifier classify-sklearn \
+  --i-classifier /data/project_data/16S/training-feature-classifiers/classifier.qza \
+  --i-reads /data/project_data/16S/pyc_manifest/rep-seqs.qza \
+  --o-classification taxonomy.qza
+
+$ qiime metadata tabulate \
+  --m-input-file taxonomy.qza \
+  --o-visualization taxonomy.qzv 
+
+#to make barplots need taxonomy from feature table step: need to change path to my paths
+$ qiime taxa barplot \
+  --i-table table.qza \
+  --i-taxonomy taxonomy.qza \
+  --m-metadata-file /data/project_data/16S/pyc_manifest \
+  --o-visualization taxa-bar-plots.qzv
+ # for faith metric
+
+#Alpha diveristy
+$ qiime diversity alpha-group-significance \
+  --i-alpha-diversity core-metrics-results/faith_pd_vector.qza \
+  --m-metadata-file /data/project_data/16S/pyc_manifest \
+  --o-visualization core-metrics-results/faith-pd-group-significance.qzv   
+
+#Beta diveristy
+$ qiime diversity beta-group-significance \
+  --i-distance-matrix core-metrics-results/weighted_unifrac_distance_matrix.qza \
+  --m-metadata-file /data/project_data/16S/pyc_manifest \
+  --m-metadata-column site-animal-health \
+  --o-visualization core-metrics-results/weighted-unifrac-site-animal-health-significance.qzv \
+  --p-pairwise
+ 
+#Alpha diveristy rarefaction plots
+$ qiime diversity alpha-rarefaction \
+  --i-table table.qza \
+  --i-phylogeny rooted-tree.qza \
+  --p-max-depth 100000 \
+  --m-metadata-file /data/project_data/16S/pyc_manifest \
+  --o-visualization alpha-rarefaction.qzv
